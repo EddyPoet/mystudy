@@ -3,74 +3,74 @@ import pandas as pd
 class EnhancedDataFrameComparator:
     def __init__(self, df1, df2, key_cols=None, value_cols=None, drop_duplicates=False, drop_cols=None):
         """
-        初始化DataFrame对比工具（支持多维度对比功能）
-        :param df1: 第一个DataFrame
-        :param df2: 第二个DataFrame
-        :param key_cols: 组合键列名列表（默认前3列）
-        :param value_cols: 对比的数值列名列表（默认后2列）
-        :param drop_duplicates: 是否去除重复行（默认False）
-        :param drop_cols: 对比前需要移除的列（默认空）
+        Initialize DataFrame comparison tool with multi-dimensional comparison features
+        :param df1: First DataFrame to compare
+        :param df2: Second DataFrame to compare
+        :param key_cols: List of columns as composite key (first 3 columns by default)
+        :param value_cols: List of numeric columns to compare (last 2 columns by default)
+        :param drop_duplicates: Whether to remove duplicate rows (False by default)
+        :param drop_cols: Columns to remove before comparison (empty by default)
         """
         self.df1 = df1.copy()
         self.df2 = df2.copy()
         
-        # 1. 移除指定列
+        # 1. Remove specified columns
         self.drop_cols = drop_cols if drop_cols is not None else []
         self._remove_unwanted_cols()
         
-        # 2. 确定键列和值列
+        # 2. Determine key columns and value columns
         self.key_cols = key_cols if key_cols else self.df1.columns[:3].tolist()
         self.value_cols = value_cols if value_cols else self.df1.columns[3:5].tolist()
         
-        # 3. 数值列保留两位小数
+        # 3. Round value columns to 2 decimal places
         self._round_value_cols()
         
-        # 4. 统一列顺序
+        # 4. Align column order
         self._align_columns()
         
-        # 5. 去除重复行（可选）
+        # 5. Remove duplicates (optional)
         if drop_duplicates:
             self._remove_duplicates()
         
-        # 6. 验证列存在性
+        # 6. Validate column existence
         self._validate_columns()
 
     def _remove_unwanted_cols(self):
-        """移除指定的多余列"""
+        """Remove specified unwanted columns from both DataFrames"""
         cols_to_drop1 = [col for col in self.drop_cols if col in self.df1.columns]
         cols_to_drop2 = [col for col in self.drop_cols if col in self.df2.columns]
         self.df1 = self.df1.drop(columns=cols_to_drop1, errors='ignore')
         self.df2 = self.df2.drop(columns=cols_to_drop2, errors='ignore')
 
     def _round_value_cols(self):
-        """将数值列保留两位小数（处理浮点精度问题）"""
+        """Round numeric value columns to 2 decimal places (handle floating-point precision issues)"""
         for col in self.value_cols:
-            # 确保列是数值类型，非数值类型不处理
+            # Ensure the column is numeric type; skip non-numeric types
             if pd.api.types.is_numeric_dtype(self.df1[col]):
                 self.df1[col] = self.df1[col].round(2)
             if pd.api.types.is_numeric_dtype(self.df2[col]):
                 self.df2[col] = self.df2[col].round(2)
 
     def _align_columns(self):
-        """统一列顺序"""
+        """Unify column order of both DataFrames"""
         target_columns = self.key_cols + self.value_cols
         self.df1 = self.df1.reindex(columns=target_columns)
         self.df2 = self.df2.reindex(columns=target_columns)
 
     def _remove_duplicates(self):
-        """去除重复行"""
+        """Remove duplicate rows based on key columns and value columns"""
         dup_cols = self.key_cols + self.value_cols
         self.df1 = self.df1.drop_duplicates(subset=dup_cols, keep='first')
         self.df2 = self.df2.drop_duplicates(subset=dup_cols, keep='first')
 
     def _validate_columns(self):
-        """验证列是否存在"""
+        """Validate that all required columns exist in both DataFrames"""
         for col in self.key_cols + self.value_cols:
             if col not in self.df1.columns or col not in self.df2.columns:
-                raise ValueError(f"列 '{col}' 在某个DataFrame中不存在")
+                raise ValueError(f"Column '{col}' does not exist in one of the DataFrames")
 
     def get_unique_rows(self):
-        """获取各自独有的行"""
+        """Get rows unique to each DataFrame based on key columns"""
         self.df1['_key_tuple'] = self.df1[self.key_cols].apply(tuple, axis=1)
         self.df2['_key_tuple'] = self.df2[self.key_cols].apply(tuple, axis=1)
         
@@ -79,7 +79,7 @@ class EnhancedDataFrameComparator:
         return df1_unique, df2_unique
 
     def get_intersection_rows(self):
-        """获取交集中有差异和无差异的行"""
+        """Get rows in intersection with differences and without differences"""
         merged = pd.merge(
             self.df1, self.df2,
             on=self.key_cols,
@@ -96,15 +96,15 @@ class EnhancedDataFrameComparator:
         return inter_with_diff, inter_no_diff
 
     def run_comparison(self):
-        """执行完整对比，返回四个结果"""
+        """Execute full comparison and return four result DataFrames"""
         df1_unique, df2_unique = self.get_unique_rows()
         inter_with_diff, inter_no_diff = self.get_intersection_rows()
         return df1_unique, df2_unique, inter_with_diff, inter_no_diff
 
     def check_row_count_consistency(self):
         """
-        检查两个DataFrame的行数是否一致
-        :return: 元组 (是否一致, df1行数, df2行数)
+        Check if the number of rows in both DataFrames is consistent
+        :return: Tuple (is_consistent, df1_row_count, df2_row_count)
         """
         df1_rows = len(self.df1)
         df2_rows = len(self.df2)
@@ -112,7 +112,7 @@ class EnhancedDataFrameComparator:
         return is_consistent, df1_rows, df2_rows
 
     def get_value_columns_sum(self):
-        """计算两个DataFrame中指定值列的总和，返回字典{列名: (df1总和, df2总和)}"""
+        """Calculate sum of specified value columns in both DataFrames, return as dictionary {column_name: (df1_sum, df2_sum)}"""
         sum_dict = {}
         for col in self.value_cols:
             df1_sum = self.df1[col].sum() if pd.api.types.is_numeric_dtype(self.df1[col]) else 0
@@ -122,24 +122,24 @@ class EnhancedDataFrameComparator:
 
     def compare_value_columns_sum(self):
         """
-        对比两个DataFrame值列总和的差异
-        :return: 字典，结构为{
-            'has_diff': 布尔值（是否有差异）,
-            'details': {列名: (df1总和, df2总和, 差值)}  # 仅包含有差异的列
+        Compare differences in sums of value columns between two DataFrames
+        :return: Dictionary with structure: {
+            'has_diff': boolean (whether there are differences),
+            'details': {column_name: (df1_sum, df2_sum, difference)}  # Only includes columns with differences
         }
         """
-        sum_dict = self.get_value_columns_sum()  # 复用总和计算结果
+        sum_dict = self.get_value_columns_sum()  # Reuse sum calculation results
         diff_details = {}
         
-        # 遍历所有值列，计算差异
+        # Iterate through all value columns to calculate differences
         for col, (sum1, sum2) in sum_dict.items():
             if not pd.api.types.is_numeric_dtype(sum1) or not pd.api.types.is_numeric_dtype(sum2):
-                continue  # 非数值类型跳过
-            diff = round(sum1 - sum2, 2)  # 计算差值（保留两位小数）
+                continue  # Skip non-numeric types
+            diff = round(sum1 - sum2, 2)  # Calculate difference (keep 2 decimal places)
             if diff != 0:
                 diff_details[col] = (sum1, sum2, diff)
         
-        # 整体是否有差异
+        # Check if there are any differences overall
         has_diff = len(diff_details) > 0
         
         return {
@@ -148,11 +148,21 @@ class EnhancedDataFrameComparator:
         }
 
     def print_sum_comparison(self):
-        """打印值列总和的差异结果"""
-        result = self.compare_value_columns_sum()
-        if result['has_diff']:
-            print("值列总和存在差异：")
-            for col, (sum1, sum2, diff) in result['details'].items():
-                print(f"列{col}：df1总和={sum1}，df2总和={sum2}，差值={diff}")
+        """Print comparison results of value columns' sums (enhanced version: show all matched columns when consistent)"""
+        sum_dict = self.get_value_columns_sum()  # Get sums of all value columns
+        diff_result = self.compare_value_columns_sum()  # Get difference judgment results
+        
+        if diff_result['has_diff']:
+            # When there are differences: show columns with differences
+            print("There are differences in the sum of value columns:")
+            for col, (sum1, sum2, diff) in diff_result['details'].items():
+                print(f"Column {col}: df1 sum = {sum1}, df2 sum = {sum2}, difference = {diff}")
         else:
-            print("所有值列的总和完全一致")
+            # When completely consistent: show sums of all value columns (distinguish df1 and df2)
+            print("The sums of all value columns are completely consistent. Detailed sums are as follows:")
+            print("-" * 60)
+            print(f"{'Column Name':<15} | {'df1 Sum':<15} | {'df2 Sum':<15}")
+            print("-" * 60)
+            for col, (sum1, sum2) in sum_dict.items():
+                print(f"{col:<15} | {sum1:<15} | {sum2:<15}")
+            print("-" * 60)
