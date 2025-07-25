@@ -1,70 +1,137 @@
 import pandas as pd
+import base64
+import hashlib
+
+class ComparisonResultSplitter:
+    """Split comparison results and generate Base64 unique identifiers (compare_key)"""
+    
+    def __init__(self, df1_unique, df2_unique, inter_with_diff, inter_no_diff, key_cols, value_cols):
+        self.df1_unique = df1_unique.copy()
+        self.df2_unique = df2_unique.copy()
+        self.inter_with_diff = inter_with_diff.copy()
+        self.inter_no_diff = inter_no_diff.copy()
+        self.key_cols = key_cols  # Columns for generating compare_key
+        self.value_cols = value_cols
+        self.all_original_cols = key_cols + value_cols
+        self.split_df = None
+
+    def _generate_compare_key(self, row):
+        """Generate Base64-encoded unique key based on key_cols"""
+        # Concatenate key column values (handle NaN)
+        key_str = '|'.join([str(row[col]) if pd.notna(row[col]) else '' for col in self.key_cols])
+        # MD5 hash + Base64 encoding
+        hash_bytes = hashlib.md5(key_str.encode('utf-8')).digest()
+        return base64.b64encode(hash_bytes).decode('utf-8')
+
+    def _split_intersection_rows(self):
+        """Split intersection rows (match/change) into two rows with compare_key"""
+        split_match, split_change = [], []
+        
+        # Process match rows
+        if not self.inter_no_diff.empty:
+            # DF1 match rows
+            df1_match = self.inter_no_diff[self.key_cols + [f'{col}_df1' for col in self.value_cols]]
+            df1_match.columns = self.all_original_cols
+            df1_match['resource'] = 'DF1'
+            df1_match['compare_status'] = 'match'
+            df1_match['compare_key'] = df1_match.apply(self._generate_compare_key, axis=1)
+            
+            # DF2 match rows
+            df2_match = self.inter_no_diff[self.key_cols + [f'{col}_df2' for col in self.value_cols]]
+            df2_match.columns = self.all_original_cols
+            df2_match['resource'] = 'DF2'
+            df2_match['compare_status'] = 'match'
+            df2_match['compare_key'] = df2_match.apply(self._generate_compare_key, axis=1)
+            
+            split_match = [df1_match, df2_match]
+
+        # Process change rows
+        if not self.inter_with_diff.empty:
+            # DF1 change rows
+            df1_change = self.inter_with_diff[self.key_cols + [f'{col}_df1' for col in self.value_cols]]
+            df1_change.columns = self.all_original_cols
+            df1_change['resource'] = 'DF1'
+            df1_change['compare_status'] = 'change'
+            df1_change['compare_key'] = df1_change.apply(self._generate_compare_key, axis=1)
+            
+            # DF2 change rows
+            df2_change = self.inter_with_diff[self.key_cols + [f'{col}_df2' for col in self.value_cols]]
+            df2_change.columns = self.all_original_cols
+            df2_change['resource'] = 'DF2'
+            df2_change['compare_status'] = 'change'
+            df2_change['compare_key'] = df2_change.apply(self._generate_compare_key, axis=1)
+            
+            split_change = [df1_change, df2_change]
+
+        return split_match, split_change
+
+    def _process_unique_rows(self):
+        """Process unique rows (add/remove) with compare_key"""
+        unique_rows = []
+        
+        # DF1 unique rows (remove status)
+        if not self.df1_unique.empty:
+            self.df1_unique['resource'] = 'DF1'
+            self.df1_unique['compare_status'] = 'remove'
+            self.df1_unique['compare_key'] = self.df1_unique.apply(self._generate_compare_key, axis=1)
+            unique_rows.append(self.df1_unique[self.all_original_cols + ['resource', 'compare_status', 'compare_key']])
+        
+        # DF2 unique rows (add status)
+        if not self.df2_unique.empty:
+            self.df2_unique['resource'] = 'DF2'
+            self.df2_unique['compare_status'] = 'add'
+            self.df2_unique['compare_key'] = self.df2_unique.apply(self._generate_compare_key, axis=1)
+            unique_rows.append(self.df2_unique[self.all_original_cols + ['resource', 'compare_status', 'compare_key']])
+
+        return unique_rows
+
+    def split_and_combine(self):
+        """Combine all split results with compare_key"""
+        split_match, split_change = self._split_intersection_rows()
+        unique_rows = self._process_unique_rows()
+        
+        all_parts = split_match + split_change + unique_rows
+        
+        if all_parts:
+            self.split_df = pd.concat(all_parts, ignore_index=True)
+            self.split_df = self.split_df[['compare_key'] + self.all_original_cols + ['resource', 'compare_status']]
+        else:
+            self.split_df = pd.DataFrame(columns=['compare_key'] + self.all_original_cols + ['resource', 'compare_status'])
+        
+        return self.split_df
+
 
 # ------------------------------
-# 1. Test data (All four types of results have data, and the number of rows is different)
+# Usage Example
 # ------------------------------
-data1 = {
-    # Key columns: 1 (unique to df1), 2 (intersection with no difference), 3 (intersection with difference), 4 (unique to df1)
-    'id': [1, 2, 3, 4],
-    'name': ['A', 'B', 'C', 'D'],
-    # Value columns: The values of row 3 are different from those in df2
-    'score': [85.0, 90.0, 70.5, 65.0],
-    'count': [2, 5, 3, 1]
-}
+if __name__ == "__main__":
+    # Simulate comparison results
+    df1_unique = pd.DataFrame({
+        'id': [1], 'name': ['A'], 'score': [85.0], 'count': [2]
+    })
 
-data2 = {
-    # Key columns: 2 (intersection with no difference), 3 (intersection with difference), 5 (unique to df2)
-    'id': [2, 3, 5],
-    'name': ['B', 'C', 'E'],
-    # Value columns: The score of row 3 is different from that in df1
-    'score': [90.0, 72.5, 80.0],
-    'count': [5, 3, 4]
-}
+    df2_unique = pd.DataFrame({
+        'id': [5], 'name': ['E'], 'score': [80.0], 'count': [4]
+    })
 
-# Convert to DataFrames (df1 has 4 rows, df2 has 3 rows, different number of rows)
-df1 = pd.DataFrame(data1)
-df2 = pd.DataFrame(data2)
+    inter_no_diff = pd.DataFrame({
+        'id': [2], 'name': ['B'],
+        'score_df1': [90.0], 'count_df1': [5],
+        'score_df2': [90.0], 'count_df2': [5]
+    })
 
+    inter_with_diff = pd.DataFrame({
+        'id': [3], 'name': ['C'],
+        'score_df1': [70.5], 'count_df1': [3],
+        'score_df2': [72.5], 'count_df2': [3]
+    })
 
-# ------------------------------
-# 2. Define comparison parameters
-# ------------------------------
-key_columns = ['id', 'name']
-value_columns = ['score', 'count']
-remove_duplicates = False  # Do not enable deduplication (no duplicate rows in this example)
-drop_columns = []
-
-
-# ------------------------------
-# 3. Perform comparison and print results
-# ------------------------------
-try:
-    comparator = EnhancedDataFrameComparator(
-        df1=df1, df2=df2,
-        key_cols=key_columns,
-        value_cols=value_columns,
-        drop_duplicates=remove_duplicates,
-        drop_cols=drop_columns
+    # Generate result
+    splitter = ComparisonResultSplitter(
+        df1_unique=df1_unique, df2_unique=df2_unique,
+        inter_with_diff=inter_with_diff, inter_no_diff=inter_no_diff,
+        key_cols=['id', 'name'], value_cols=['score', 'count']
     )
-
-    # 1. Row count check (Expected to be inconsistent)
-    print("=== 1. Row count check ===")
-    consistent, r1, r2 = comparator.check_row_count_consistency()
-    print(f"df1 rows: {r1}, df2 rows: {r2} (consistent: {'Yes' if consistent else 'No'})\n")
-
-    # 2. Value column sum comparison (Expected to have differences)
-    print("=== 2. Value column sum comparison ===")
-    comparator.print_sum_comparison()
-    print()
-
-    # 3. Row-level results (All four DataFrames have data)
-    print("=== 3. Row-level results (all 4 DataFrames have data) ===")
-    df1_unique, df2_unique, inter_with_diff, inter_no_diff = comparator.run_comparison()
-
-    print("Rows unique to df1:\n", df1_unique)
-    print("\nRows unique to df2:\n", df2_unique)
-    print("\nIntersection rows with differences:\n", inter_with_diff)
-    print("\nIntersection rows without differences:\n", inter_no_diff)
-
-except ValueError as e:
-    print(f"Comparison failed: {e}")
+    result = splitter.split_and_combine()
+    print("=== Split Result with Unique compare_key ===")
+    print(result)
