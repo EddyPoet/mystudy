@@ -3,7 +3,7 @@ import pandas as pd
 class EnhancedDataFrameComparator:
     def __init__(self, df1, df2, key_cols=None, value_cols=None, drop_duplicates=False, drop_cols=None):
         """
-        初始化DataFrame对比工具（支持数值列保留两位小数等功能）
+        初始化DataFrame对比工具（支持多维度对比功能）
         :param df1: 第一个DataFrame
         :param df2: 第二个DataFrame
         :param key_cols: 组合键列名列表（默认前3列）
@@ -101,7 +101,6 @@ class EnhancedDataFrameComparator:
         inter_with_diff, inter_no_diff = self.get_intersection_rows()
         return df1_unique, df2_unique, inter_with_diff, inter_no_diff
 
-    # 新增：校验并获取两个DataFrame的行数是否一致
     def check_row_count_consistency(self):
         """
         检查两个DataFrame的行数是否一致
@@ -111,3 +110,49 @@ class EnhancedDataFrameComparator:
         df2_rows = len(self.df2)
         is_consistent = df1_rows == df2_rows
         return is_consistent, df1_rows, df2_rows
+
+    def get_value_columns_sum(self):
+        """计算两个DataFrame中指定值列的总和，返回字典{列名: (df1总和, df2总和)}"""
+        sum_dict = {}
+        for col in self.value_cols:
+            df1_sum = self.df1[col].sum() if pd.api.types.is_numeric_dtype(self.df1[col]) else 0
+            df2_sum = self.df2[col].sum() if pd.api.types.is_numeric_dtype(self.df2[col]) else 0
+            sum_dict[col] = (round(df1_sum, 2), round(df2_sum, 2))
+        return sum_dict
+
+    def compare_value_columns_sum(self):
+        """
+        对比两个DataFrame值列总和的差异
+        :return: 字典，结构为{
+            'has_diff': 布尔值（是否有差异）,
+            'details': {列名: (df1总和, df2总和, 差值)}  # 仅包含有差异的列
+        }
+        """
+        sum_dict = self.get_value_columns_sum()  # 复用总和计算结果
+        diff_details = {}
+        
+        # 遍历所有值列，计算差异
+        for col, (sum1, sum2) in sum_dict.items():
+            if not pd.api.types.is_numeric_dtype(sum1) or not pd.api.types.is_numeric_dtype(sum2):
+                continue  # 非数值类型跳过
+            diff = round(sum1 - sum2, 2)  # 计算差值（保留两位小数）
+            if diff != 0:
+                diff_details[col] = (sum1, sum2, diff)
+        
+        # 整体是否有差异
+        has_diff = len(diff_details) > 0
+        
+        return {
+            'has_diff': has_diff,
+            'details': diff_details
+        }
+
+    def print_sum_comparison(self):
+        """打印值列总和的差异结果"""
+        result = self.compare_value_columns_sum()
+        if result['has_diff']:
+            print("值列总和存在差异：")
+            for col, (sum1, sum2, diff) in result['details'].items():
+                print(f"列{col}：df1总和={sum1}，df2总和={sum2}，差值={diff}")
+        else:
+            print("所有值列的总和完全一致")
