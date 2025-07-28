@@ -1,126 +1,98 @@
-import os
 import pandas as pd
 from pathlib import Path
-from typing import List, Tuple
+from typing import Tuple
 
 
-class CSVFileComparator:
-    def __init__(self, dir1: str, dir2: str):
-        self.dir1 = Path(dir1).resolve()
-        self.dir2 = Path(dir2).resolve()
-        self.inconsistent_files = []  # 不匹配的文件对
-        self.consistent_files = []    # 匹配的文件对
-        self.mismatch_details = pd.DataFrame()  # 不匹配的详细对比结果
+class CSVDataFrameComparator:
+    def __init__(self, file1: str, file2: str):
+        """
+        初始化CSV对比工具
+        :param file1: 第一个CSV文件路径
+        :param file2: 第二个CSV文件路径
+        """
+        self.file1 = Path(file1).resolve()
+        self.file2 = Path(file2).resolve()
+        self.df1 = pd.DataFrame()  # 第一个文件的DataFrame
+        self.df2 = pd.DataFrame()  # 第二个文件的DataFrame
+        self.compare_result = pd.DataFrame()  # 最终对比结果
 
-    def _read_csv_as_df(self, file_path: Path) -> pd.DataFrame:
-        """读取CSV为DataFrame，统一列名排序"""
+    def load_csv(self, encoding: str = 'utf-8') -> None:
+        """加载两个CSV文件为DataFrame（自动按列名排序，确保列顺序一致）"""
         try:
-            df = pd.read_csv(file_path)
-            # 按列名排序（忽略列顺序影响）
-            return df.reindex(sorted(df.columns), axis=1)
+            # 读取CSV并按列名排序（忽略列顺序影响）
+            self.df1 = pd.read_csv(self.file1, encoding=encoding).reindex(sorted(pd.read_csv(self.file1).columns), axis=1)
+            self.df2 = pd.read_csv(self.file2, encoding=encoding).reindex(sorted(pd.read_csv(self.file2).columns), axis=1)
+            print(f"成功加载文件：\n- {self.file1}\n- {self.file2}")
         except Exception as e:
-            print(f"读取文件 {file_path} 失败: {e}")
-            return pd.DataFrame()
+            print(f"加载CSV文件失败：{e}")
 
     def compare(self) -> None:
-        """执行基础对比，区分匹配/不匹配文件"""
-        self.inconsistent_files = []
-        self.consistent_files = []
-        
-        for csv_path in self.dir1.rglob('*.csv'):
-            rel_path = csv_path.relative_to(self.dir1)
-            counterpart = self.dir2 / rel_path
-
-            if not counterpart.exists() or not counterpart.is_file():
-                print(f"文件 {counterpart} 不存在，跳过对比")
-                continue
-
-            # 读取并标准化列顺序
-            df1 = self._read_csv_as_df(csv_path)
-            df2 = self._read_csv_as_df(counterpart)
-
-            # 基础对比（忽略列顺序和行顺序）
-            if df1.equals(df2.sort_values(by=list(df1.columns)).reset_index(drop=True)):
-                self.consistent_files.append((csv_path, counterpart))
-            else:
-                self.inconsistent_files.append((csv_path, counterpart))
-
-    def analyze_mismatches(self) -> pd.DataFrame:
-        """分析不匹配文件的详细差异，生成汇总DataFrame"""
-        all_details = []
-        
-        for idx, (path1, path2) in enumerate(self.inconsistent_files, 1):
-            # 读取两个文件的DataFrame
-            df1 = self._read_csv_as_df(path1).assign(source=os.path.basename(path1))
-            df2 = self._read_csv_as_df(path2).assign(source=os.path.basename(path2))
-            
-            # 合并数据（按所有列进行匹配）
-            merged = pd.merge(
-                df1, df2, 
-                on=list(df1.columns[:-1]),  # 排除source列
-                how='outer',
-                indicator=True
-            )
-            
-            # 标记匹配状态
-            merged['match_status'] = merged['_merge'].map({
-                'both': 'match',
-                'left_only': 'only_in_file1',
-                'right_only': 'only_in_file2'
-            })
-            
-            # 整理列名和排序
-            merged = merged.rename(columns={
-                'source_x': 'source', 
-                'source_y': None
-            }).drop(columns=['_merge']).fillna('')
-            
-            # 添加文件对标识
-            merged['file_pair'] = f"pair_{idx}: {os.path.basename(path1)} vs {os.path.basename(path2)}"
-            
-            all_details.append(merged)
-
-        # 合并所有结果并排序
-        if all_details:
-            self.mismatch_details = pd.concat(all_details, ignore_index=True)
-            # 按文件对和匹配状态排序
-            self.mismatch_details = self.mismatch_details.sort_values(
-                by=['file_pair', 'match_status']
-            ).reset_index(drop=True)
-        
-        return self.mismatch_details
-
-    def print_results(self) -> None:
-        """打印基础对比结果"""
-        print(f"共发现 {len(self.consistent_files)} 对匹配文件，{len(self.inconsistent_files)} 对不匹配文件")
-        if self.inconsistent_files:
-            print("\n不匹配文件对：")
-            for i, (p1, p2) in enumerate(self.inconsistent_files, 1):
-                print(f"{i}. {p1} vs {p2}")
-
-    def save_mismatch_details(self, output_file: str = "mismatch_details.csv") -> None:
-        """保存不匹配的详细对比结果到CSV"""
-        if self.mismatch_details.empty:
-            print("没有不匹配的文件需要保存详细结果")
+        """对比两个DataFrame，计算交集和差集并合并结果"""
+        if self.df1.empty or self.df2.empty:
+            print("请先加载有效的CSV文件（DataFrame为空）")
             return
-        
-        self.mismatch_details.to_csv(output_file, index=False)
-        print(f"\n不匹配文件的详细对比结果已保存到：{output_file}")
+
+        # 确保两个DataFrame列名一致（否则无法直接对比）
+        if set(self.df1.columns) != set(self.df2.columns):
+            print("警告：两个CSV文件的列名集合不一致，可能影响对比结果")
+
+        # 合并两个DataFrame，通过_merge标记来源
+        merged = pd.merge(
+            self.df1.assign(source=str(self.file1)),  # 添加来源列（第一个文件）
+            self.df2.assign(source=str(self.file2)),  # 添加来源列（第二个文件）
+            on=list(self.df1.columns),  # 基于所有列对比
+            how='outer',
+            indicator=True
+        )
+
+        # 标记每行的状态（交集/仅在文件1/仅在文件2）
+        merged['status'] = merged['_merge'].map({
+            'both': '交集（两个文件都有）',
+            'left_only': f'仅在文件1：{self.file1}',
+            'right_only': f'仅在文件2：{self.file2}'
+        })
+
+        # 整理结果（删除_merge列，保留有用信息）
+        self.compare_result = merged.drop(columns=['_merge']).sort_values(by='status')
+
+    def save_result(self, output_file: str = 'csv_compare_result.csv') -> None:
+        """将对比结果保存为CSV文件"""
+        if self.compare_result.empty:
+            print("没有可保存的对比结果（结果为空）")
+            return
+
+        try:
+            self.compare_result.to_csv(output_file, index=False, encoding='utf-8')
+            print(f"对比结果已保存至：{output_file}")
+        except Exception as e:
+            print(f"保存结果失败：{e}")
+
+    def print_summary(self) -> None:
+        """打印对比结果的摘要信息"""
+        if self.compare_result.empty:
+            print("暂无对比结果")
+            return
+
+        total = len(self.compare_result)
+        intersection = sum(self.compare_result['status'] == '交集（两个文件都有）')
+        only_file1 = sum(self.compare_result['status'].str.contains('仅在文件1'))
+        only_file2 = sum(self.compare_result['status'].str.contains('仅在文件2'))
+
+        print("\n===== 对比结果摘要 =====")
+        print(f"总记录数：{total}")
+        print(f"交集（两个文件都有的行）：{intersection} 行")
+        print(f"仅在文件1的行：{only_file1} 行")
+        print(f"仅在文件2的行：{only_file2} 行")
 
 
 # 使用示例
 if __name__ == "__main__":
-    folder1 = "path/to/first/folder"
-    folder2 = "path/to/second/folder"
+    # 替换为实际的CSV文件路径
+    csv1 = "file1.csv"
+    csv2 = "file2.csv"
 
-    comparator = CSVFileComparator(folder1, folder2)
-    comparator.compare()  # 基础对比
-    comparator.print_results()  # 打印匹配/不匹配文件列表
-    
-    # 分析不匹配的详细差异
-    mismatch_df = comparator.analyze_mismatches()
-    if not mismatch_df.empty:
-        print("\n不匹配文件的详细对比结果（前5行）：")
-        print(mismatch_df.head().to_string())
-    
-    comparator.save_mismatch_details()  # 保存详细结果到CSV
+    comparator = CSVDataFrameComparator(csv1, csv2)
+    comparator.load_csv()  # 加载文件
+    comparator.compare()   # 执行对比
+    comparator.print_summary()  # 打印摘要
+    comparator.save_result()    # 保存结果
