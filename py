@@ -1,98 +1,96 @@
 import pandas as pd
-from pathlib import Path
-from typing import Tuple
+import hashlib
+import base64
 
+class ComparisonMerger:
+    """Merge and compare two DataFrames using df.merge, with value columns in the same row"""
+    
+    def __init__(self, df1, df2, key_cols, value_cols):
+        self.df1 = df1.copy(deep=True)
+        self.df2 = df2.copy(deep=True)
+        self.key_cols = key_cols
+        self.value_cols = value_cols
+        self.merged_df = None
+        self._column_order = [
+            'compare_key', 'compare_status'
+        ] + key_cols + [f'{col}_df1' for col in value_cols] + [f'{col}_df2' for col in value_cols]
 
-class CSVDataFrameComparator:
-    def __init__(self, file1: str, file2: str):
-        """
-        初始化CSV对比工具
-        :param file1: 第一个CSV文件路径
-        :param file2: 第二个CSV文件路径
-        """
-        self.file1 = Path(file1).resolve()
-        self.file2 = Path(file2).resolve()
-        self.df1 = pd.DataFrame()  # 第一个文件的DataFrame
-        self.df2 = pd.DataFrame()  # 第二个文件的DataFrame
-        self.compare_result = pd.DataFrame()  # 最终对比结果
+    def _generate_compare_key(self, row):
+        """Generate unique compare key based on key columns"""
+        key_str = '|'.join([str(row[col]) if pd.notna(row[col]) else '' for col in self.key_cols])
+        hash_bytes = hashlib.md5(key_str.encode('utf-8')).digest()
+        return base64.b64encode(hash_bytes).decode('utf-8')
 
-    def load_csv(self, encoding: str = 'utf-8') -> None:
-        """加载两个CSV文件为DataFrame（自动按列名排序，确保列顺序一致）"""
-        try:
-            # 读取CSV并按列名排序（忽略列顺序影响）
-            self.df1 = pd.read_csv(self.file1, encoding=encoding).reindex(sorted(pd.read_csv(self.file1).columns), axis=1)
-            self.df2 = pd.read_csv(self.file2, encoding=encoding).reindex(sorted(pd.read_csv(self.file2).columns), axis=1)
-            print(f"成功加载文件：\n- {self.file1}\n- {self.file2}")
-        except Exception as e:
-            print(f"加载CSV文件失败：{e}")
+    def _get_value_diff_status(self, row):
+        """Determine if value columns have differences"""
+        for col in self.value_cols:
+            val1 = row[f'{col}_df1']
+            val2 = row[f'{col}_df2']
+            # Handle NaN comparisons (pd.isna returns True for both NaN and None)
+            if pd.isna(val1) and pd.isna(val2):
+                continue
+            if not pd.isna(val1) and not pd.isna(val2) and val1 == val2:
+                continue
+            return 'change'
+        return 'match'
 
-    def compare(self) -> None:
-        """对比两个DataFrame，计算交集和差集并合并结果"""
-        if self.df1.empty or self.df2.empty:
-            print("请先加载有效的CSV文件（DataFrame为空）")
-            return
-
-        # 确保两个DataFrame列名一致（否则无法直接对比）
-        if set(self.df1.columns) != set(self.df2.columns):
-            print("警告：两个CSV文件的列名集合不一致，可能影响对比结果")
-
-        # 合并两个DataFrame，通过_merge标记来源
-        merged = pd.merge(
-            self.df1.assign(source=str(self.file1)),  # 添加来源列（第一个文件）
-            self.df2.assign(source=str(self.file2)),  # 添加来源列（第二个文件）
-            on=list(self.df1.columns),  # 基于所有列对比
+    def merge_and_compare(self):
+        # Merge DataFrames on key columns with suffixes
+        self.merged_df = pd.merge(
+            self.df1, self.df2,
+            on=self.key_cols,
             how='outer',
+            suffixes=('_df1', '_df2'),
             indicator=True
         )
 
-        # 标记每行的状态（交集/仅在文件1/仅在文件2）
-        merged['status'] = merged['_merge'].map({
-            'both': '交集（两个文件都有）',
-            'left_only': f'仅在文件1：{self.file1}',
-            'right_only': f'仅在文件2：{self.file2}'
-        })
+        # Generate compare key
+        self.merged_df['compare_key'] = self.merged_df.apply(
+            self._generate_compare_key, axis=1
+        )
 
-        # 整理结果（删除_merge列，保留有用信息）
-        self.compare_result = merged.drop(columns=['_merge']).sort_values(by='status')
+        # Determine compare status
+        status_conditions = [
+            # Rows only in df1
+            (self.merged_df['_merge'] == 'left_only', 'remove'),
+            # Rows only in df2
+            (self.merged_df['_merge'] == 'right_only', 'add'),
+            # Rows in both - check values
+            (self.merged_df['_merge'] == 'both', 
+             self.merged_df.apply(self._get_value_diff_status, axis=1))
+        ]
 
-    def save_result(self, output_file: str = 'csv_compare_result.csv') -> None:
-        """将对比结果保存为CSV文件"""
-        if self.compare_result.empty:
-            print("没有可保存的对比结果（结果为空）")
-            return
+        # Apply conditions
+        conditions, choices = zip(*status_conditions)
+        self.merged_df['compare_status'] = np.select(conditions, choices, default='unknown')
 
-        try:
-            self.compare_result.to_csv(output_file, index=False, encoding='utf-8')
-            print(f"对比结果已保存至：{output_file}")
-        except Exception as e:
-            print(f"保存结果失败：{e}")
+        # Drop temporary merge column and reorder
+        self.merged_df = self.merged_df.drop(columns=['_merge'])
+        self.merged_df = self.merged_df.reindex(columns=self._column_order)
 
-    def print_summary(self) -> None:
-        """打印对比结果的摘要信息"""
-        if self.compare_result.empty:
-            print("暂无对比结果")
-            return
-
-        total = len(self.compare_result)
-        intersection = sum(self.compare_result['status'] == '交集（两个文件都有）')
-        only_file1 = sum(self.compare_result['status'].str.contains('仅在文件1'))
-        only_file2 = sum(self.compare_result['status'].str.contains('仅在文件2'))
-
-        print("\n===== 对比结果摘要 =====")
-        print(f"总记录数：{total}")
-        print(f"交集（两个文件都有的行）：{intersection} 行")
-        print(f"仅在文件1的行：{only_file1} 行")
-        print(f"仅在文件2的行：{only_file2} 行")
+        return self.merged_df
 
 
-# 使用示例
+# Usage example
 if __name__ == "__main__":
-    # 替换为实际的CSV文件路径
-    csv1 = "file1.csv"
-    csv2 = "file2.csv"
+    df1 = pd.DataFrame({
+        'id': [1, 2, 3],
+        'name': ['A', 'B', 'C'],
+        'score': [85.0, 90.0, 70.5],
+        'count': [2, 5, 3]
+    })
+    df2 = pd.DataFrame({
+        'id': [2, 3, 5],
+        'name': ['B', 'C', 'E'],
+        'score': [90.0, 72.5, 80.0],
+        'count': [5, 3, 4]
+    })
 
-    comparator = CSVDataFrameComparator(csv1, csv2)
-    comparator.load_csv()  # 加载文件
-    comparator.compare()   # 执行对比
-    comparator.print_summary()  # 打印摘要
-    comparator.save_result()    # 保存结果
+    merger = ComparisonMerger(
+        df1=df1, df2=df2,
+        key_cols=['id', 'name'],
+        value_cols=['score', 'count']
+    )
+    result = merger.merge_and_compare()
+    print("=== Merged Comparison Result ===")
+    print(result)
